@@ -461,7 +461,8 @@ def train(model, X_train, y_train, X_test, y_test,
             print(f"Epoch {epoch + 1}/{n_epochs} | Train Loss: {train_loss:.6f} | Test Loss: {test_loss:.6f}")
         train_losses.append(train_loss)
         test_losses.append(test_loss)
-        torch.mps.empty_cache()
+        if device == 'mps':
+            torch.mps.empty_cache()
 
     return train_losses, test_losses
 
@@ -561,7 +562,8 @@ def plot_model_on_test(model, X_test, y_test, n_plots = 30, plot_mean = True):
             else:
                 plt.plot(x, probs_tip[-1], color = "red")
                 plt.plot(x, probs_non_tip[-1], color = "blue")
-        torch.mps.empty_cache()
+        if device == 'mps':
+            torch.mps.empty_cache()
 
     if plot_mean:
         # convert to numpy

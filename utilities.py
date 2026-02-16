@@ -315,7 +315,7 @@ def show_sequence_as_a_tape(x, start_at = 1):
     Convert a single sequence into a causal "tape" representation.
 
     This function creates a stacked tensor containing all progressive
-    prefixes of the input sequence:
+    subsequences of the time series:
 
         [x[:start_at],
          x[:start_at+1],
@@ -324,19 +324,19 @@ def show_sequence_as_a_tape(x, start_at = 1):
 
     where T = x.shape[0].
 
-    Each prefix is left-padded so that all rows have equal length, forming
+    Each subsequence is left-padded so that all rows have equal length, forming
     a 2D tensor. A singleton channel dimension is then added to match the
     expected input shape of CNN/RNN models.
 
     Parameters
     ----------
     x : torch.Tensor
-        One-dimensional input sequence of shape (T,),
+        One-dimensional time series of shape (T,),
         where T is the sequence length.
 
     start_at : int, default=1
-        Index at which to begin generating prefixes.
-        - If start_at=1, prefixes start from x[:1].
+        Index at which to begin generating subsequences.
+        - If start_at=1, subsequence starts from x[:1].
         - Must satisfy 1 <= start_at <= T.
 
     Returns
@@ -344,7 +344,7 @@ def show_sequence_as_a_tape(x, start_at = 1):
     tape : torch.Tensor
         Tensor of shape (T - start_at + 1, 1, T), where:
 
-        - Dimension 0: time steps (progressive prefixes)
+        - Dimension 0: time steps (progressive subsequences)
         - Dimension 1: input channel (size 1)
         - Dimension 2: padded sequence length (T)
 
@@ -483,7 +483,7 @@ def plot_model_on_test(model, X_test, y_test, n_plots = 30, plot_mean = True):
     Plot the model's predicted tipping probability over time on test data.
 
     This function evaluates the model in a causal manner: for each selected
-    trajectory, predictions are computed on progressively longer prefixes
+    trajectory, predictions are computed on progressively longer subsequences
     of the sequence (using `show_sequence_as_a_tape`). This produces a
     time-evolving probability curve for the tipping class.
 

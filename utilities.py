@@ -10,6 +10,8 @@ from scipy.stats import bernoulli
 from scipy.ndimage import gaussian_filter
 from statsmodels.nonparametric.smoothers_lowess import lowess
 import matplotlib.pyplot as plt
+import seaborn as sns
+from copy import copy
 
 
 device = (
@@ -161,15 +163,12 @@ def read_X_y_data(train_test_files, class_labels = [0, 1], detrend = True, **kwa
         y_train.extend([class_vector]*X_train[-1].shape[0])
         y_test.extend([class_vector]*X_test[-1].shape[0])
 
-    idx = np.arange(len(y_train), dtype=np.int8)
-    np.random.shuffle(idx)
-    np.random.shuffle(idx)
-    np.random.shuffle(idx)
-    X_train = np.vstack(X_train)
-    y_train = np.vstack(y_train)
-
-    X_train = X_train[idx]
-    y_train = y_train[idx]
+    idx = list(range(len(y_train)))
+    random.shuffle(idx)
+    random.shuffle(idx)
+    random.shuffle(idx)
+    X_train = np.vstack(X_train)[idx]
+    y_train = np.vstack(y_train)[idx]
 
     X_test = np.vstack(X_test)
     y_test = np.vstack(y_test)
@@ -180,12 +179,12 @@ def read_X_y_data(train_test_files, class_labels = [0, 1], detrend = True, **kwa
         T = np.apply_along_axis(trend, 1, X_test, **kwargs)
         X_test -= T
         # X = (X - np.mean(X, axis=1).reshape(-1, 1))/np.std(X, axis = 1).reshape(-1, 1)
-    X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
-    X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
+    X_train = torch.tensor(X_train, dtype=torch.float32)
+    X_test = torch.tensor(X_test, dtype=torch.float32)
 
 
-    y_train = torch.tensor(y_train, dtype=torch.float32).to(device)
-    y_test = torch.tensor(y_test, dtype=torch.float32).to(device)
+    y_train = torch.tensor(y_train, dtype=torch.float32)
+    y_test = torch.tensor(y_test, dtype=torch.float32)
 
     return X_train, y_train, X_test, y_test
 
@@ -193,11 +192,11 @@ def read_X_y_data(train_test_files, class_labels = [0, 1], detrend = True, **kwa
 
 def prepare_train_test_data(X_train, y_train,
                             X_test, y_test,
-                            num_batches = 10,
+                            train_num_batches = 10,
+                            test_num_batches = 5,
                             shorter_sequences = False,
                             min_short_seq_len = 50,
-                            max_short_seq_len = 500,
-                            device = device):
+                            max_short_seq_len = 500):
     """
     Prepare training and testing tensors for model input, optionally generate
     variable-length training sequences, and split the training set into batches.
@@ -275,9 +274,10 @@ def prepare_train_test_data(X_train, y_train,
     - Training batches are created by contiguous slicing, not random
       shuffling.
     """
-
+    
     seq_len = X_train[0].shape[-1]
     n_train = y_train.shape[0] 
+    n_test = y_test.shape[0]
 
     # add shorter sequences so the classifer can deal with sequences of variable lengths
     if shorter_sequences:
@@ -298,17 +298,25 @@ def prepare_train_test_data(X_train, y_train,
     # for the CNN to process but X_train_pad is currently of the shape (batch_size, sequence length)
     # unsqueeze(dim = d) adds an extra dimension next to d but this is equal to 1
     # One can also use reshape or view functions in pytorch
-    X_train = X_train.unsqueeze(dim = 1).to(device)
-    X_test = X_test.unsqueeze(dim = 1).to(device)
+    X_train = X_train.unsqueeze(dim = 1)
+    X_test = X_test.unsqueeze(dim = 1)
 
-    batch_size = n_train//num_batches
-    idx = np.arange(num_batches)*batch_size
+    batch_size = n_train//train_num_batches
+    idx = np.arange(train_num_batches)*batch_size
     idx = np.r_[idx, n_train]
 
-    X_train_batch = [X_train[idx[i]:idx[i+1]] for i in range(num_batches)]
-    y_train_batch = [y_train[idx[i]:idx[i+1]] for i in range(num_batches)]
+    X_train_batch = [X_train[idx[i]:idx[i+1]] for i in range(train_num_batches)]
+    y_train_batch = [y_train[idx[i]:idx[i+1]] for i in range(train_num_batches)]
 
-    return X_train_batch, y_train_batch, X_test, y_test
+
+    batch_size = n_test//test_num_batches
+    idx = np.arange(test_num_batches)*batch_size
+    idx = np.r_[idx, n_test]
+
+    X_test_batch = [X_test[idx[i]:idx[i+1]] for i in range(test_num_batches)]
+    y_test_batch = [y_test[idx[i]:idx[i+1]] for i in range(test_num_batches)]
+
+    return X_train_batch, y_train_batch, X_test_batch, y_test_batch
 
 def show_sequence_as_a_tape(x, start_at = 1):
     """
@@ -327,7 +335,7 @@ def show_sequence_as_a_tape(x, start_at = 1):
     Each subsequence is left-padded so that all rows have equal length, forming
     a 2D tensor. A singleton channel dimension is then added to match the
     expected input shape of CNN/RNN models.
-
+    
     Parameters
     ----------
     x : torch.Tensor
@@ -436,7 +444,6 @@ def train(model, X_train, y_train, X_test, y_test,
     """
     model.train()
     N = len(X_train)
-    X_test, y_test = X_test.to(device), y_test.to(device)
     for epoch in range(n_epochs):
         # Training
         train_loss_sum = 0
@@ -448,21 +455,25 @@ def train(model, X_train, y_train, X_test, y_test,
             train_loss = loss_fn(y_pred_train, y)
             train_loss.backward()
             optimizer.step()
+            train_loss_sum += train_loss.detach().item()
             # Testing
             with torch.no_grad(): # turn of gradients as there is not use for them
-                y_pred_test = model(X_test)
-                test_loss_sum += loss_fn(y_pred_test, y_test).detach().item()
-                train_loss_sum += train_loss.detach().item()
+                train_loss_sum += loss_fn(y_pred_train, y).detach().item()
+                for (X, y) in zip(X_test, y_test):
+                    X, y = X.to(device), y.to(device)
+                    y_pred_test = model(X)
+                    test_loss_sum += loss_fn(y_pred_test, y).detach().item()/len(X_test)
+
+            if device == 'mps':
+                torch.mps.empty_cache()
         # average out to get train and loss
         train_loss = train_loss_sum/N
         test_loss = test_loss_sum/N
-        
+    
         if (epoch + 1) % print_every == 0:
             print(f"Epoch {epoch + 1}/{n_epochs} | Train Loss: {train_loss:.6f} | Test Loss: {test_loss:.6f}")
         train_losses.append(train_loss)
         test_losses.append(test_loss)
-        if device == 'mps':
-            torch.mps.empty_cache()
 
     return train_losses, test_losses
 
@@ -478,7 +489,9 @@ def plot_train_and_test_loss(train_loss, test_loss):
     plt.legend()
     plt.show()
 
-def plot_model_on_test(model, X_test, y_test, n_plots = 30, plot_mean = True):
+def plot_model_on_test(model, X_test, y_test, n_plots = 30, plot_mean = True,
+                       labels = ["Non-tipping", "Tipping"], color_palette = None, 
+                       seed = 16022026):
     """
     Plot the model's predicted tipping probability over time on test data.
 
@@ -505,6 +518,13 @@ def plot_model_on_test(model, X_test, y_test, n_plots = 30, plot_mean = True):
     y_test : torch.Tensor
         One-hot encoded test labels of shape:
             (n_samples, n_classes)
+    label: list of strings, default ["Non-tipping", "Tipping"]
+        contains the class names arrange in order i.e 
+            ["name_for_class_0", "name_for_class_1", ..., "name_for_class_n"]
+    seed: Integer
+        Random seed to ensure reproducibility
+    color_pallete: list/tuples, default is tab10 if the number of classes is less than 
+        10, otherwise it defaults to seaborn's red to blue color pallete. . 
 
     n_plots : int or None, default=None
         Number of tipping and non-tipping trajectories to plot.
@@ -536,72 +556,98 @@ def plot_model_on_test(model, X_test, y_test, n_plots = 30, plot_mean = True):
     - The function assumes binary classification with the tipping class
       at index 1.
     """
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    labels = copy(labels)
     plt.figure(figsize=(8, 5))
-    tip_cond = y_test[:, 1]== 1
-    non_tip_cond = y_test[:, 1] == 0
-    X_test_tip = X_test[tip_cond]
-    X_test_non_tip = X_test[non_tip_cond]
+    n_classes = y_test.shape[1]
+    classes = range(n_classes)
+    if color_palette is None:
+        try:
+            color_palette = sns.color_palette() 
+            last_color = color_palette[n_classes]
+        except IndexError: 
+            color_palette = sns.color_palette("RdBu", n_colors=n_classes) 
+
+    class_cond = [y_test[:, c] == 1 for c in classes]
+    num_of_each_class = [c.sum().cpu() for c in class_cond]
+    X_test_cond = [X_test[class_cond[c]] for c in classes]
+    # tip_cond = y_test[:, 1]== 1
+    # non_tip_cond = y_test[:, 1] == 0
+    # X_test_tip = X_test[tip_cond]
+    # X_test_non_tip = X_test[non_tip_cond]
     if n_plots is None:
-        idx = range(min(tip_cond.sum().cpu(), non_tip_cond.sum().cpu()))
+        idx = range(min(num_of_each_class))
     else:
-        idx = np.random.randint(0, min(tip_cond.sum().cpu(), non_tip_cond.sum().cpu()), n_plots)
+        idx = np.random.randint(0, min(num_of_each_class), n_plots)
     x = np.arange(1, X_test[0].shape[-1]+1)
-    probs_non_tip = []
-    probs_tip = []
+    # initialise dictionary to contain tipping trajectories
+    probs_tip = {c:[] for c in classes}
     for j in range(len(idx)):
         i = idx[j]
-    # for i in range(min(X_test_tip.shape[0], X_test_non_tip.shape[0])):
-        x0_tip = show_sequence_as_a_tape(X_test_tip[i, 0, :])
-        x0_non_tip = show_sequence_as_a_tape(X_test_non_tip[i, 0, :])
-        probs_tip.append(model(x0_tip)[:, 1].detach().cpu().numpy())
-        probs_non_tip.append(model(x0_non_tip)[:, 1].detach().cpu().numpy())
-        if not plot_mean:
-            if j == 0:
-                plt.plot(x, probs_tip[-1], label = "Tipping", color = "red")
-                plt.plot(x, probs_non_tip[-1], label = "Non-tipping", color = "blue")
+        # pick trajectory of each class 
+        for c in classes:
+            x0 = show_sequence_as_a_tape(X_test_cond[c][i, 0, :]).to(device)
+            p_tip_curr = model(x0).detach().cpu().numpy()
+            if c == 0: 
+                # if in the non-tipping scenario, probability of tipping 
+                # should 1 - probability of non tipping
+                probs_tip[c].append(p_tip_curr[:, np.array(classes) != 0].sum(axis = 1))
             else:
-                plt.plot(x, probs_tip[-1], color = "red")
-                plt.plot(x, probs_non_tip[-1], color = "blue")
-        if device == 'mps':
-            torch.mps.empty_cache()
+                probs_tip[c].append(p_tip_curr[:, c])
+            if not plot_mean:
+                plt.plot(x, probs_tip[c][-1], 
+                        label = labels[c] if j == 0 else "", 
+                        color = color_palette[c])
+                # labels[c] = "_nolegend_"
+            # plt.plot(x, probs_non_tip[-1], label = "Non-tipping", color = "blue")
+            if device == 'mps':
+                torch.mps.empty_cache()
 
     if plot_mean:
-        # convert to numpy
-        probs_tip = np.array(probs_tip)
-        probs_non_tip = np.array(probs_non_tip)
+        for c in classes:
+            # convert to numpy
+            prob_tip_c = np.array(probs_tip[c])
+            # probs_non_tip = np.array(probs_non_tip)
 
-        # mean and standard deviation of those that would tip
-        mean_tip = np.mean(probs_tip, axis=0)
-        std_tip  = np.std(probs_tip, axis=0)
+            # mean and standard deviation of those that would tip
+            mean_tip_c = np.mean(prob_tip_c, axis=0)
+            std_tip_c  = np.std(prob_tip_c, axis=0)
 
-        # mean and standard deviation of those that would not tip
-        mean_non = np.mean(probs_non_tip, axis=0)
-        std_non  = np.std(probs_non_tip, axis=0)
+            # mean and standard deviation of those that would not tip
+            # mean_non = np.mean(probs_non_tip, axis=0)
+            # std_non  = np.std(probs_non_tip, axis=0)
 
-        plt.figure(figsize=(8, 5))
-        # plot mean
-        plt.plot(x, mean_tip, color="red", label="Tipping")
-        plt.plot(x, mean_non, color="blue", label="Non-tipping")
-        # plot + or - one standard deviations
-        plt.fill_between(
-            x,
-            mean_tip - std_tip,
-            mean_tip + std_tip,
-            color="red",
-            alpha=0.25,
-        )
-        plt.fill_between(
-            x,
-            mean_non -  std_non,
-            mean_non + std_non,
-            color="blue",
-            alpha=0.25,
-        )
+            # plot mean
+            plt.plot(x, mean_tip_c, color=color_palette[c], label=labels[c])
+            # labels[c] = "_nolegend_"
+
+            # plt.plot(x, mean_non, color="blue", label="Non-tipping")
+            # plot + or - one standard devations
+            plt.fill_between(
+                x,
+                mean_tip_c - std_tip_c,
+                mean_tip_c + std_tip_c,
+                color=color_palette[c],
+                alpha = 0.5
+            )
+            # plt.fill_between(
+            #     x,
+            #     mean_non -  std_non,
+            #     mean_non + std_non,
+            #     color="blue",
+            #     alpha=0.25,
+            # )
 
     plt.xlabel("Time step")
-    # plt.title(f"Mean tipping probability ± 1 standard deviations")
-    plt.title(f"Tipping probability for an ensemble of {len(idx)} tipping and non-tipping trajectories")
+    if plot_mean:
+        plt.title(f"Mean tipping probability for an ensemble of {len(idx)} of each class ± 1 standard deviations")
+        plt.legend()
+    else:
+        plt.title("")
+        plt.legend()
     plt.ylabel("Tipping probability")
-    plt.legend()
     plt.tight_layout()
     plt.show()
+
+

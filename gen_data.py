@@ -5,7 +5,7 @@ import random
 from utilities import trend
 #%%
 np.random.seed(16022026)
-N = 1000 # number of samples 
+N = 1000 # number of samples of each type of bifurcation/non-bifurcation
 seq_length = 5000
 
 # parameter starts at -2 and ends at 0
@@ -164,3 +164,5 @@ np.savetxt("./data/X_test_null_detrended_gaussian.txt", X_test_null)
 np.savetxt("./data/X_train_transcritical_detrended_gaussian.txt", X_train_tc)
 np.savetxt("./data/X_test_transcritical_detrended_gaussian.txt", X_test_tc)
 
+
+# %%
